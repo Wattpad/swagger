@@ -1,12 +1,13 @@
 package parser_test
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/suite"
-	"github.com/yvasiyarov/swagger/parser"
 	"go/ast"
 	"strings"
 	"testing"
+
+	"github.com/Wattpad/swagger/parser"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
 type ModelSuite struct {

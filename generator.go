@@ -11,7 +11,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/yvasiyarov/swagger/parser"
+	"github.com/Wattpad/swagger/parser"
 )
 
 var apiPackage = flag.String("apiPackage", "", "Package which implement API controllers")
