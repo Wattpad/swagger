@@ -22,7 +22,7 @@ type Parser struct {
 	PackagePathCache                  map[string]string
 	PackageImports                    map[string]map[string]string
 	BasePath                          string
-	IsController                      func(*ast.FuncDecl) bool
+	IsController                      func(*ast.FuncDecl, string) bool
 	TypesImplementingMarshalInterface map[string]string
 }
 
@@ -360,7 +360,7 @@ func (parser *Parser) ParseApiDescription(packageName string) {
 			for _, astDescription := range astFile.Decls {
 				switch astDeclaration := astDescription.(type) {
 				case *ast.FuncDecl:
-					if parser.IsController(astDeclaration) {
+					if parser.IsController(astDeclaration, packageName) {
 						operation := NewOperation(parser, packageName)
 						if astDeclaration.Doc != nil && astDeclaration.Doc.List != nil {
 							for _, comment := range astDeclaration.Doc.List {

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/yvasiyarov/swagger/parser"
 	"go/ast"
 	"log"
 	"os"
 	"path"
 	"strings"
+
+	"github.com/yvasiyarov/swagger/parser"
 )
 
 var apiPackage = flag.String("apiPackage", "", "Package which implement API controllers")
@@ -27,11 +28,11 @@ var apiDescriptionsJson = {{apiDescriptions}}
 `
 
 // It must return true if funcDeclaration is controller. We will try to parse only comments before controllers
-func IsController(funcDeclaration *ast.FuncDecl) bool {
+func IsController(funcDeclaration *ast.FuncDecl, packageName string) bool {
 	if funcDeclaration.Recv != nil && len(funcDeclaration.Recv.List) > 0 {
 		if starExpression, ok := funcDeclaration.Recv.List[0].Type.(*ast.StarExpr); ok {
 			receiverName := fmt.Sprint(starExpression.X)
-			return strings.Index(receiverName, "Context") != -1 ||  strings.Index(receiverName, "Controller") != -1
+			return strings.Index(packageName, "controller") != -1 || strings.Index(receiverName, "Controller") != -1
 		}
 	}
 	return false
