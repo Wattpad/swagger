@@ -10,9 +10,16 @@ import (
 
 var host = flag.String("host", "127.0.0.1", "Host")
 var port = flag.String("port", "8080", "Port")
+var ip = flag.String("ip", "", "Request IP")
+
 var staticContent = flag.String("staticPath", "./swagger-ui", "Path to folder with Swagger UI")
 
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
+	if *ip != "" && *ip != strings.Split(r.RemoteAddr, ":")[0] {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
 	isJsonRequest := false
 
 	if acceptHeaders, ok := r.Header["Accept"]; ok {
@@ -55,7 +62,11 @@ func main() {
 	}
 
 	listenTo := *host + ":" + *port
-	log.Printf("Star listen to %s", listenTo)
+	log.Printf("Start listen to %s", listenTo)
+
+	if *ip != "" {
+		log.Printf("Only acception connections from %s", *ip)
+	}
 
 	http.ListenAndServe(listenTo, http.DefaultServeMux)
 	//http.ListenAndServe(":8080", http.StripPrefix("/swagger-ui/", http.FileServer(http.Dir("./swagger-ui")) )
