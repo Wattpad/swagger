@@ -113,7 +113,15 @@ func main() {
 	}
 
 	parser := InitParser()
-	gopath := os.Getenv("GOPATH")
+	gopath := ""
+
+	for _, path := range strings.Split(os.Getenv("GOPATH"), ":") {
+		if !strings.Contains(path, ".godeps") {
+			gopath = path
+			break
+		}
+	}
+
 	if gopath == "" {
 		log.Fatalf("Please, set $GOPATH environment variable\n")
 	}
