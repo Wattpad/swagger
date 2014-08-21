@@ -15,7 +15,9 @@ var ip = flag.String("ip", "", "Request IP")
 var staticContent = flag.String("staticPath", "./swagger-ui", "Path to folder with Swagger UI")
 
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
-	if *ip != "" && *ip != strings.Split(r.RemoteAddr, ":")[0] {
+	requestIP := strings.Split(r.RemoteAddr, ":")[0]
+	if *ip != "" && *ip != requestIP {
+		log.Printf("Blocked IP %s", requestIP)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
