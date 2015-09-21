@@ -20,8 +20,8 @@ type Parser struct {
 	CurrentPackage                    string
 	TypeDefinitions                   map[string]map[string]*ast.TypeSpec
 	PackagePathCache                  map[string]string
-	PackageImports                    map[string]map[string]string
-	BasePath                          string
+	PackageImports                    map[string]map[string][]string
+	BasePath, ControllerClass, Ignore string
 	IsController                      func(*ast.FuncDecl, string) bool
 	TypesImplementingMarshalInterface map[string]string
 }
@@ -36,7 +36,7 @@ func NewParser() *Parser {
 		TopLevelApis:                      make(map[string]*ApiDeclaration),
 		TypeDefinitions:                   make(map[string]map[string]*ast.TypeSpec),
 		PackagePathCache:                  make(map[string]string),
-		PackageImports:                    make(map[string]map[string]string),
+		PackageImports:                    make(map[string]map[string][]string),
 		TypesImplementingMarshalInterface: make(map[string]string),
 	}
 }
@@ -62,19 +62,21 @@ func (parser *Parser) ParseGeneralApiInfo(mainApiFile string) {
 				attribute := strings.ToLower(strings.Split(commentLine, " ")[0])
 				switch attribute {
 				case "@apiversion":
-					parser.Listing.ApiVersion = strings.TrimSpace(commentLine[len("@APIVersion"):])
-				case "@title":
-					parser.Listing.Infos.Title = strings.TrimSpace(commentLine[len("@Title"):])
-				case "@description":
-					parser.Listing.Infos.Description = strings.TrimSpace(commentLine[len("@Description"):])
+					parser.Listing.ApiVersion = strings.TrimSpace(commentLine[len(attribute):])
+				case "@apititle":
+					parser.Listing.Infos.Title = strings.TrimSpace(commentLine[len(attribute):])
+				case "@apidescription":
+					parser.Listing.Infos.Description = strings.TrimSpace(commentLine[len(attribute):])
 				case "@termsofserviceurl":
-					parser.Listing.Infos.TermsOfServiceUrl = strings.TrimSpace(commentLine[len("@TermsOfServiceUrl"):])
+					parser.Listing.Infos.TermsOfServiceUrl = strings.TrimSpace(commentLine[len(attribute):])
 				case "@contact":
-					parser.Listing.Infos.Contact = strings.TrimSpace(commentLine[len("@Contact"):])
+					parser.Listing.Infos.Contact = strings.TrimSpace(commentLine[len(attribute):])
 				case "@licenseurl":
-					parser.Listing.Infos.LicenseUrl = strings.TrimSpace(commentLine[len("@LicenseUrl"):])
+					parser.Listing.Infos.LicenseUrl = strings.TrimSpace(commentLine[len(attribute):])
 				case "@license":
-					parser.Listing.Infos.License = strings.TrimSpace(commentLine[len("@License"):])
+					parser.Listing.Infos.License = strings.TrimSpace(commentLine[len(attribute):])
+				case "@basepath":
+					parser.Listing.BasePath = strings.TrimSpace(commentLine[len(attribute):])
 				}
 			}
 		}
@@ -109,6 +111,7 @@ func (parser *Parser) CheckRealPackagePath(packagePath string) string {
 		log.Fatalf("Please, set $GOPATH environment variable\n")
 	}
 
+	// first check GOPATH
 	pkgRealpath := ""
 	gopathsList := filepath.SplitList(gopath)
 	for _, path := range gopathsList {
@@ -119,14 +122,25 @@ func (parser *Parser) CheckRealPackagePath(packagePath string) string {
 			}
 		}
 	}
+
+	// next, check GOROOT (/src)
 	if pkgRealpath == "" {
 		goroot := filepath.Clean(runtime.GOROOT())
 		if goroot == "" {
 			log.Fatalf("Please, set $GOROOT environment variable\n")
 		}
-		if evalutedPath, err := filepath.EvalSymlinks(filepath.Join(goroot, "src", "pkg", packagePath)); err == nil {
+		if evalutedPath, err := filepath.EvalSymlinks(filepath.Join(goroot, "src", packagePath)); err == nil {
 			if _, err := os.Stat(evalutedPath); err == nil {
 				pkgRealpath = evalutedPath
+			}
+		}
+
+		// next, check GOROOT (/src/pkg) (for golang < v1.4)
+		if pkgRealpath == "" {
+			if evalutedPath, err := filepath.EvalSymlinks(filepath.Join(goroot, "src", "pkg", packagePath)); err == nil {
+				if _, err := os.Stat(evalutedPath); err == nil {
+					pkgRealpath = evalutedPath
+				}
 			}
 		}
 	}
@@ -179,10 +193,18 @@ func (parser *Parser) AddOperation(op *Operation) {
 		api.ApiVersion = parser.Listing.ApiVersion
 		api.SwaggerVersion = SwaggerVersion
 		api.ResourcePath = "/" + resource
-		api.BasePath = parser.BasePath
+		api.BasePath = parser.Listing.BasePath // to be changed dynamically later
 
 		parser.TopLevelApis[resource] = api
+	}
 
+	found := false
+	for _, apiRef := range parser.Listing.Apis {
+		if apiRef.Path == api.ResourcePath {
+			found = true
+		}
+	}
+	if !found {
 		apiRef := &ApiRef{
 			Path:        api.ResourcePath,
 			Description: op.Summary,
@@ -273,12 +295,12 @@ func (parser *Parser) ParseImportStatements(packageName string) map[string]bool 
 	imports := make(map[string]bool)
 	astPackages := parser.GetPackageAst(pkgRealPath)
 
-	parser.PackageImports[pkgRealPath] = make(map[string]string)
+	parser.PackageImports[pkgRealPath] = make(map[string][]string)
 	for _, astPackage := range astPackages {
 		for _, astFile := range astPackage.Files {
 			for _, astImport := range astFile.Imports {
 				importedPackageName := strings.Trim(astImport.Path.Value, "\"")
-				if !IsIgnoredPackage(importedPackageName) {
+				if !parser.isIgnoredPackage(importedPackageName) {
 					realPath := parser.GetRealPackagePath(importedPackageName)
 					//log.Printf("path: %#v, original path: %#v", realPath, astImport.Path.Value)
 					if _, ok := parser.TypeDefinitions[realPath]; !ok {
@@ -286,8 +308,24 @@ func (parser *Parser) ParseImportStatements(packageName string) map[string]bool 
 						//log.Printf("Parse %s, Add new import definition:%s\n", packageName, astImport.Path.Value)
 					}
 
-					importPath := strings.Split(importedPackageName, "/")
-					parser.PackageImports[pkgRealPath][importPath[len(importPath)-1]] = importedPackageName
+					var importedPackageAlias string
+					if astImport.Name != nil && astImport.Name.Name != "." && astImport.Name.Name != "_" {
+						importedPackageAlias = astImport.Name.Name
+					} else {
+						importPath := strings.Split(importedPackageName, "/")
+						importedPackageAlias = importPath[len(importPath)-1]
+					}
+
+					isExists := false
+					for _, v := range parser.PackageImports[pkgRealPath][importedPackageAlias] {
+						if v == importedPackageName {
+							isExists = true
+						}
+					}
+
+					if !isExists {
+						parser.PackageImports[pkgRealPath][importedPackageAlias] = append(parser.PackageImports[pkgRealPath][importedPackageAlias], importedPackageName)
+					}
 				}
 			}
 		}
@@ -340,10 +378,21 @@ func (parser *Parser) FindModelDefinition(modelName string, currentPackage strin
 				log.Fatalf("Can not find definition of %s model. Package %s dont import anything", modelNameFromPath, pkgRealPath)
 			} else if relativePackage, ok := imports[modelNameParts[0]]; !ok {
 				log.Fatalf("Package %s is not imported to %s, Imported: %#v\n", modelNameParts[0], currentPackage, imports)
-			} else if model = parser.GetModelDefinition(modelNameFromPath, relativePackage); model == nil {
-				log.Fatalf("Can not find definition of %s model in package %s", modelNameFromPath, relativePackage)
 			} else {
-				modelPackage = relativePackage
+				var modelFound bool
+
+				for _, packageName := range relativePackage {
+					if model = parser.GetModelDefinition(modelNameFromPath, packageName); model != nil {
+						modelPackage = packageName
+						modelFound = true
+
+						break
+					}
+				}
+
+				if !modelFound {
+					log.Fatalf("Can not find definition of %s model in package %s", modelNameFromPath, relativePackage)
+				}
 			}
 		}
 	}
@@ -360,7 +409,7 @@ func (parser *Parser) ParseApiDescription(packageName string) {
 			for _, astDescription := range astFile.Decls {
 				switch astDeclaration := astDescription.(type) {
 				case *ast.FuncDecl:
-					if parser.IsController(astDeclaration, packageName) {
+					if parser.IsController(astDeclaration, parser.ControllerClass) {
 						operation := NewOperation(parser, packageName)
 						if astDeclaration.Doc != nil && astDeclaration.Doc.List != nil {
 							for _, comment := range astDeclaration.Doc.List {
@@ -397,16 +446,29 @@ func (parser *Parser) ParseSubApiDescription(commentLine string) {
 	if matches := re.FindStringSubmatch(commentLine); len(matches) != 3 {
 		log.Printf("Can not parse sub api description %s, skipped", commentLine)
 	} else {
+		found := false
 		for _, ref := range parser.Listing.Apis {
 			if ref.Path == matches[2] {
+				found = true
 				ref.Description = strings.TrimSpace(matches[1])
 			}
+		}
+		if !found {
+			subApi := &ApiRef{Path: matches[2],
+				Description: strings.TrimSpace(matches[1]),
+			}
+			parser.Listing.Apis = append(parser.Listing.Apis, subApi)
 		}
 	}
 }
 
-func IsIgnoredPackage(packageName string) bool {
-	return packageName == "C" || packageName == "appengine/cloudsql"
+func (parser *Parser) isIgnoredPackage(packageName string) bool {
+	r, _ := regexp.Compile("appengine+")
+	matched, err := regexp.MatchString(parser.Ignore, packageName)
+	if err != nil {
+		log.Fatalf("The -ignore argument is not a valid regular expression: %v\n", err)
+	}
+	return packageName == "C" || r.MatchString(packageName) || matched
 }
 
 func ParserFileFilter(info os.FileInfo) bool {
