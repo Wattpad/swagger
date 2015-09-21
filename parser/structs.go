@@ -6,10 +6,11 @@ import (
 
 const SwaggerVersion = "1.2"
 const (
-	ContentTypeJson  = "application/json"
-	ContentTypeXml   = "application/xml"
-	ContentTypePlain = "text/plain"
-	ContentTypeHtml  = "text/html"
+	ContentTypeJson              = "application/json"
+	ContentTypeXml               = "application/xml"
+	ContentTypePlain             = "text/plain"
+	ContentTypeHtml              = "text/html"
+	ContentTypeMultiPartFormData = "multipart/form-data"
 )
 
 var CommentIsEmptyError = errors.New("Comment is empty")
@@ -17,7 +18,7 @@ var CommentIsEmptyError = errors.New("Comment is empty")
 type ResourceListing struct {
 	ApiVersion     string `json:"apiVersion"`
 	SwaggerVersion string `json:"swaggerVersion"`
-	//	BasePath       string     `json:"basePath"`
+	BasePath       string `json:"basePath,omitempty"`
 	Apis  []*ApiRef  `json:"apis"`
 	Infos Infomation `json:"info"`
 }
@@ -54,6 +55,7 @@ type Protocol struct {
 type ResponseMessage struct {
 	Code          int    `json:"code"`
 	Message       string `json:"message"`
+	ResponseType  string `json:"responseType"`
 	ResponseModel string `json:"responseModel"`
 }
 
