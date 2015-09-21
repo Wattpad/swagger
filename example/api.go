@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 // @SubApi Order management API [/orders]
+=======
+// @SubApi Order management test2
+>>>>>>> 2808067... test
 package example
 
 import (

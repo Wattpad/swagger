@@ -52,38 +52,39 @@ func (operation *Operation) SetItemsType(itemsType string) {
 
 func (operation *Operation) ParseComment(comment string) error {
 	commentLine := strings.TrimSpace(strings.TrimLeft(comment, "//"))
-	attribute := strings.ToLower(strings.Split(commentLine, " ")[0])
-	switch attribute {
+	if len(commentLine) == 0 {
+		return nil
+	}
+	attribute := strings.Fields(commentLine)[0]
+	switch strings.ToLower(attribute) {
 	case "@router":
 		if err := operation.ParseRouterComment(commentLine); err != nil {
 			return err
 		}
 	case "@resource":
-		resource := strings.TrimSpace(commentLine[len("@Resource"):])
+		resource := strings.TrimSpace(commentLine[len(attribute):])
 		if resource[0:1] == "/" {
 			resource = resource[1:]
 		}
 		operation.ForceResource = resource
 	case "@title":
-		operation.Nickname = strings.TrimSpace(commentLine[len("@Title"):])
+		operation.Nickname = strings.TrimSpace(commentLine[len(attribute):])
 	case "@description":
-		operation.Summary = strings.TrimSpace(commentLine[len("@Description"):])
-	case "@success":
-		sourceString := strings.TrimSpace(commentLine[len("@Success"):])
-		if err := operation.ParseResponseComment(sourceString); err != nil {
+		operation.Summary = strings.TrimSpace(commentLine[len(attribute):])
+	case "@success", "@failure":
+		if err := operation.ParseResponseComment(strings.TrimSpace(commentLine[len(attribute):])); err != nil {
 			return err
 		}
 	case "@param":
-		if err := operation.ParseParamComment(commentLine); err != nil {
+		if err := operation.ParseParamComment(strings.TrimSpace(commentLine[len(attribute):])); err != nil {
 			return err
 		}
-	case "@failure":
-		sourceString := strings.TrimSpace(commentLine[len("@Failure"):])
-		if err := operation.ParseResponseComment(sourceString); err != nil {
+	case "@accept", "@consume":
+		if err := operation.ParseAcceptComment(strings.TrimSpace(commentLine[len(attribute):])); err != nil {
 			return err
 		}
-	case "@accept":
-		if err := operation.ParseAcceptComment(commentLine); err != nil {
+	case "@produce":
+		if err := operation.ParseProduceComment(strings.TrimSpace(commentLine[len(attribute):])); err != nil {
 			return err
 		}
 	}
@@ -109,24 +110,57 @@ func (operation *Operation) getUniqueModels() []*Model {
 	return uniqueModels
 }
 
+func (operation *Operation) registerType(typeName string) (string, error) {
+	registerType := ""
+
+	if translation, ok := typeDefTranslations[typeName]; ok {
+		registerType = translation
+	} else if IsBasicType(typeName) {
+		registerType = typeName
+	} else {
+		model := NewModel(operation.parser)
+		knownModelNames := map[string]bool{}
+
+		err, innerModels := model.ParseModel(typeName, operation.parser.CurrentPackage, knownModelNames)
+		if err != nil {
+			return registerType, err
+		}
+		if translation, ok := typeDefTranslations[typeName]; ok {
+			registerType = translation
+		} else {
+			registerType = model.Id
+
+			operation.Models = append(operation.Models, model)
+			operation.Models = append(operation.Models, innerModels...)
+		}
+	}
+
+	return registerType, nil
+}
+
 // Parse params return []string of param properties
 // @Param	queryText		form	      string	  true		        "The email for login"
 // 			[param name]    [param type] [data type]  [is mandatory?]   [Comment]
 func (operation *Operation) ParseParamComment(commentLine string) error {
 	swaggerParameter := Parameter{}
-	paramString := strings.TrimSpace(commentLine[len("@Param "):])
+	paramString := commentLine
 
-	re := regexp.MustCompile(`([\w]+)[\s]+([\w]+)[\s]+([\w.]+)[\s]+([\w]+)[\s]+"([^"]+)"`)
+	re := regexp.MustCompile(`([-\w]+)[\s]+([\w]+)[\s]+([\w.]+)[\s]+([\w]+)[\s]+"([^"]+)"`)
 
 	if matches := re.FindStringSubmatch(paramString); len(matches) != 6 {
 		return fmt.Errorf("Can not parse param comment \"%s\", skipped.", paramString)
 	} else {
-		//TODO: if type is not simple, then add to Models[]
+		typeName, err := operation.registerType(matches[3])
+		if err != nil {
+			return err
+		}
+
 		swaggerParameter.Name = matches[1]
 		swaggerParameter.ParamType = matches[2]
-		swaggerParameter.Type = matches[3]
-		swaggerParameter.DataType = matches[3]
-		swaggerParameter.Required = strings.ToLower(matches[4]) == "true"
+		swaggerParameter.Type = typeName
+		swaggerParameter.DataType = typeName
+		requiredText := strings.ToLower(matches[4])
+		swaggerParameter.Required = (requiredText == "true" || requiredText == "required")
 		swaggerParameter.Description = matches[5]
 
 		operation.Parameters = append(operation.Parameters, swaggerParameter)
@@ -137,21 +171,39 @@ func (operation *Operation) ParseParamComment(commentLine string) error {
 
 // @Accept  json
 func (operation *Operation) ParseAcceptComment(commentLine string) error {
-	accepts := strings.Split(strings.TrimSpace(strings.TrimSpace(commentLine[len("@Accept"):])), ",")
+	accepts := strings.Split(commentLine, ",")
 	for _, a := range accepts {
 		switch a {
 		case "json", "application/json":
 			operation.Consumes = append(operation.Consumes, ContentTypeJson)
-			operation.Produces = append(operation.Produces, ContentTypeJson)
 		case "xml", "text/xml":
 			operation.Consumes = append(operation.Consumes, ContentTypeXml)
-			operation.Produces = append(operation.Produces, ContentTypeXml)
 		case "plain", "text/plain":
 			operation.Consumes = append(operation.Consumes, ContentTypePlain)
-			operation.Produces = append(operation.Produces, ContentTypePlain)
 		case "html", "text/html":
 			operation.Consumes = append(operation.Consumes, ContentTypeHtml)
+		case "mpfd", "multipart/form-data":
+			operation.Consumes = append(operation.Consumes, ContentTypeMultiPartFormData)
+		}
+	}
+	return nil
+}
+
+// @Produce  json
+func (operation *Operation) ParseProduceComment(commentLine string) error {
+	produces := strings.Split(commentLine, ",")
+	for _, a := range produces {
+		switch a {
+		case "json", "application/json":
+			operation.Produces = append(operation.Produces, ContentTypeJson)
+		case "xml", "text/xml":
+			operation.Produces = append(operation.Produces, ContentTypeXml)
+		case "plain", "text/plain":
+			operation.Produces = append(operation.Produces, ContentTypePlain)
+		case "html", "text/html":
 			operation.Produces = append(operation.Produces, ContentTypeHtml)
+		case "mpfd", "multipart/form-data":
+			operation.Produces = append(operation.Produces, ContentTypeMultiPartFormData)
 		}
 	}
 	return nil
@@ -190,13 +242,15 @@ func (operation *Operation) ParseResponseComment(commentLine string) error {
 	}
 	response.Message = strings.Trim(matches[4], "\"")
 
+<<<<<<< HEAD
 	typeName := ""
-	if matches[3] == "error" || IsBasicType(matches[3]) {
+	if IsBasicType(matches[3]) {
 		typeName = matches[3]
 	} else {
 		model := NewModel(operation.parser)
 		response.ResponseModel = matches[3]
-		if err, innerModels := model.ParseModel(response.ResponseModel, operation.parser.CurrentPackage); err != nil {
+		knownModelNames := map[string]bool{}
+		if err, innerModels := model.ParseModel(response.ResponseModel, operation.parser.CurrentPackage, &knownModelNames); err != nil {
 			return err
 		} else {
 			typeName = model.Id
@@ -204,7 +258,14 @@ func (operation *Operation) ParseResponseComment(commentLine string) error {
 			operation.Models = append(operation.Models, model)
 			operation.Models = append(operation.Models, innerModels...)
 		}
+=======
+	typeName, err := operation.registerType(matches[3])
+	if err != nil {
+		return err
+>>>>>>> 6b00a52... Output for go format
 	}
+
+	response.ResponseType = strings.Trim(matches[2], "{}")
 
 	response.ResponseModel = typeName
 	if response.Code == 200 {
