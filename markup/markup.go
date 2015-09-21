@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yvasiyarov/swagger/parser"
+	"github.com/Wattpad/swagger/parser"
 )
 
 const (
