@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"log"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -22,7 +23,8 @@ func NewModel(p *Parser) *Model {
 }
 
 // modelName is something like package.subpackage.SomeModel or just "subpackage.SomeModel"
-func (m *Model) ParseModel(modelName string, currentPackage string) (error, []*Model) {
+func (m *Model) ParseModel(modelName string, currentPackage string, knownModelNames map[string]bool) (error, []*Model) {
+	knownModelNames[modelName] = true
 	//log.Printf("Before parse model |%s|, package: |%s|\n", modelName, currentPackage)
 
 	astTypeSpec, modelPackage := m.parser.FindModelDefinition(modelName, currentPackage)
@@ -31,7 +33,9 @@ func (m *Model) ParseModel(modelName string, currentPackage string) (error, []*M
 	m.Id = strings.Join(append(strings.Split(modelPackage, "/"), modelNameParts[len(modelNameParts)-1]), ".")
 
 	var innerModelList []*Model
-	if astStructType, ok := astTypeSpec.Type.(*ast.StructType); ok {
+	if astTypeDef, ok := astTypeSpec.Type.(*ast.Ident); ok {
+		typeDefTranslations[astTypeSpec.Name.String()] = astTypeDef.Name
+	} else if astStructType, ok := astTypeSpec.Type.(*ast.StructType); ok {
 		m.ParseFieldList(astStructType.Fields.List, modelPackage)
 		usedTypes := make(map[string]bool)
 
@@ -44,7 +48,13 @@ func (m *Model) ParseModel(modelName string, currentPackage string) (error, []*M
 					typeName = property.Items.Ref
 				}
 			}
+			if translation, ok := typeDefTranslations[typeName]; ok {
+				typeName = translation
+			}
 			if IsBasicType(typeName) || m.parser.IsImplementMarshalInterface(typeName) {
+				continue
+			}
+			if _, exists := knownModelNames[typeName]; exists {
 				continue
 			}
 
@@ -56,7 +66,7 @@ func (m *Model) ParseModel(modelName string, currentPackage string) (error, []*M
 
 		for typeName, _ := range usedTypes {
 			typeModel := NewModel(m.parser)
-			if err, typeInnerModels := typeModel.ParseModel(typeName, modelPackage); err != nil {
+			if err, typeInnerModels := typeModel.ParseModel(typeName, modelPackage, knownModelNames); err != nil {
 				//log.Printf("Parse Inner Model error %#v \n", err)
 				return err, nil
 			} else {
@@ -82,7 +92,7 @@ func (m *Model) ParseModel(modelName string, currentPackage string) (error, []*M
 			}
 		}
 		//log.Printf("After parse inner model list: %#v\n (%s)", usedTypes, modelName)
-		//log.Fatalf("Inner model list: %#v\n", innerModelList)
+		// log.Fatalf("Inner model list: %#v\n", innerModelList)
 
 	}
 
@@ -109,11 +119,18 @@ func (m *Model) ParseModelProperty(field *ast.Field, modelPackage string) {
 	property := NewModelProperty()
 
 	typeAsString := property.GetTypeAsString(field.Type)
-	//	log.Printf("Get type as string %s \n", typeAsString)
+	//log.Printf("Get type as string %s \n", typeAsString)
+
+	// Sometimes reflection reports an object as "&{foo Bar}" rather than just "foo.Bar"
+	// The next 2 lines of code normalize them to foo.Bar
+	reInternalRepresentation := regexp.MustCompile("&\\{(\\w*) (\\w*)\\}")
+	typeAsString = string(reInternalRepresentation.ReplaceAll([]byte(typeAsString), []byte("$1.$2")))
 
 	if strings.HasPrefix(typeAsString, "[]") {
 		property.Type = "array"
 		property.SetItemType(typeAsString[2:])
+	} else if typeAsString == "time.Time" {
+		property.Type = "Time"
 	} else {
 		property.Type = typeAsString
 	}
@@ -139,7 +156,8 @@ func (m *Model) ParseModelProperty(field *ast.Field, modelPackage string) {
 		innerModel = NewModel(m.parser)
 		//log.Printf("Try to parse embeded type %s \n", name)
 		//log.Fatalf("DEBUG: field: %#v\n, selector.X: %#v\n selector.Sel: %#v\n", field, astSelectorExpr.X, astSelectorExpr.Sel)
-		innerModel.ParseModel(name, modelPackage)
+		knownModelNames := map[string]bool{}
+		innerModel.ParseModel(name, modelPackage, knownModelNames)
 
 		for innerFieldName, innerField := range innerModel.Properties {
 			m.Properties[innerFieldName] = innerField
@@ -172,6 +190,10 @@ func (m *Model) ParseModelProperty(field *ast.Field, modelPackage string) {
 			}
 			if v == "required" {
 				isRequired = true
+			}
+			// We will not document at all any fields with a json tag of "-"
+			if v == "-" {
+				return
 			}
 		}
 		if required := structTag.Get("required"); required != "" || isRequired {
@@ -220,7 +242,11 @@ var basicTypes = map[string]bool{
 	"byte":       true,
 	"rune":       true,
 	"uintptr":    true,
+	"error":      true,
+	"Time":       true,
 }
+
+var typeDefTranslations = map[string]string{}
 
 func IsBasicType(typeName string) bool {
 	_, ok := basicTypes[typeName]
