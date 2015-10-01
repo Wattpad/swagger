@@ -13,7 +13,7 @@ import (
 var host = flag.String("host", "0.0.0.0", "Host")
 var port = flag.String("port", "8080", "Port")
 var staticContent = flag.String("staticPath", "../swagger-ui", "Path to folder with Swagger UI")
-var serviceURL = flag.String("api", "http://0.0.0.0:8090", "The base path URI of the API service")
+var serviceURL = flag.String("serviceURL", "http://0.0.0.0:8090", "The base path URI of the API service")
 
 func decodeRequestParams(data []byte) (map[string]interface{}, error) {
 	userRequest := make(map[string]interface{})
